@@ -7,6 +7,7 @@ from typing import Dict, Optional, Tuple, Union
 
 import torch
 from lightning.fabric.utilities.load import _NotYetLoadedTensor as NotYetLoadedTensor
+from safetensors.torch import save_file
 
 from litgpt import Config
 from litgpt.scripts.convert_hf_checkpoint import layer_template, load_param
@@ -245,6 +246,7 @@ def convert_lit_checkpoint(checkpoint_dir: Path, output_dir: Path) -> None:
 
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "model.pth"
+    safetensors_path = output_dir / "model.safetensors"
 
     if "falcon" in config.name:
         copy_fn = partial(copy_weights_falcon, config.name)
@@ -265,6 +267,10 @@ def convert_lit_checkpoint(checkpoint_dir: Path, output_dir: Path) -> None:
         copy_fn(sd, lit_weights, saver=saver)
         gc.collect()
         saver.save(sd)
+    
+
+    #save_file(sd, safetensors_path)
+    
 
 
 if __name__ == "__main__":
