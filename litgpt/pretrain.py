@@ -152,6 +152,7 @@ def main(
 ) -> None:
     validate_args(train, eval, initial_checkpoint_dir, resume)
 
+
     if fabric.global_rank == 0:
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -204,7 +205,7 @@ def main(
         fabric.load(resume, state)
 
     train_time = time.perf_counter()
-    fit(fabric, devices, state, train_dataloader, val_dataloader, out_dir, tokenizer_dir, train, eval)
+    fit(fabric, devices, state, train_dataloader, val_dataloader, out_dir, tokenizer_dir, tokenizer, train, eval)
 
     # Save final checkpoint
     save_checkpoint(fabric, state, tokenizer_dir, out_dir / "final" / "lit_model.pth")
@@ -222,6 +223,7 @@ def fit(
     val_dataloader: DataLoader,
     out_dir: Path,
     tokenizer_dir: Optional[Path],
+    tokenizer: Tokenizer,
     train: TrainArgs,
     eval: EvalArgs,
 ) -> None:
@@ -229,11 +231,13 @@ def fit(
     optimizer = state["optimizer"]
 
     if eval.initial_validation:
-        val_loss = validate(fabric, model, val_dataloader, max_iters=eval.max_iters)
+        val_loss, val_acc = validate(fabric, model, val_dataloader, max_iters=eval.max_iters)
         val_loss = f"{val_loss:.3f}"
+        val_acc = f"{val_acc:.3f}"
     else:
         validate(fabric, model, val_dataloader, max_iters=2)   # sanity check
         val_loss = "n/a"
+        val_acc = "n/a"
 
     throughput = ThroughputMonitor(fabric, window_size=5)
 
@@ -279,7 +283,18 @@ def fit(
         is_accumulating = state["iter_num"] % train.gradient_accumulation_iters(devices) != 0
         with fabric.no_backward_sync(model, enabled=is_accumulating):
             logits = model(input_ids)
+            period_locs = torch.where(targets==15, True, False)
+            mask = torch.zeros_like(period_locs, dtype=torch.bool)
+            #raise ValueError(f"{period_locs.to(torch.float).mean()}")
+            mask[:, 0:-1] = period_locs[:, 1:]
+            mask[:, 0:-2] += period_locs[:, 2:]
+            
+            #Period is 15 and endoftext is 0. GID is 5417. Need to find the chars between 5417 and 15.
+            # If too slow, can cheat and just look at the two chars before the 15, since it's guaranteed (?)
+            # that there are at least two.
             loss = chunked_cross_entropy(logits, targets)
+            preds = torch.max(logits, dim=-1)[1]  # Max returns (values, indices)
+            acc = (preds[mask] == targets[mask]).to(torch.float).mean()
             fabric.backward(loss / train.gradient_accumulation_iters(devices))
 
         running_loss.update(loss.detach())
@@ -302,6 +317,7 @@ def fit(
             )
             metrics = {
                 "loss": loss,
+                "acc": acc,
                 "iter": state["iter_num"],
                 "step": state["step_count"],
                 "epoch": train_iterator.epoch,
@@ -315,10 +331,14 @@ def fit(
             }
             if isinstance(val_loss, float):
                 val_loss = f"{val_loss:.3f}"
+            if isinstance(val_loss, float):
+                val_loss = f"{val_loss:.3f}"
             fabric.print(
                 f"Epoch {metrics['epoch']+1} | iter {metrics['iter']} step {metrics['step']} |"
                 f" loss train: {metrics['loss']:.3f},"
                 f" val: {val_loss} |"
+                f" acc train: {metrics['acc']:.3f},"
+                f" val: {val_acc} |"
                 f" iter time: {metrics['iter_time'] * 1000:.2f} ms"
                 f"{' (step)' if not is_accumulating else ''}"
                 f" remaining time: {timedelta(seconds=int(metrics['remaining_time']))!s}"
@@ -330,12 +350,13 @@ def fit(
 
         if val_dataloader is not None and not is_accumulating and state["step_count"] % eval.interval == 0:
             t0 = time.perf_counter()
-            val_loss = validate(fabric, model, val_dataloader, max_iters=eval.max_iters)
+            val_loss, val_acc = validate(fabric, model, val_dataloader, max_iters=eval.max_iters)
             val_loss = val_loss.item()
+            val_acc = val_acc.item()
             td = time.perf_counter() - t0
 
             fabric.print(f"iter {state['iter_num']}: val loss {val_loss:.4f}, val time: {td * 1000:.2f} ms")
-            metrics = {"val_loss": val_loss, "val_ppl": math.exp(val_loss)}
+            metrics = {"val_loss": val_loss, "val_ppl": math.exp(val_loss), "val_acc": val_acc}
             fabric.log_dict(metrics, step=state["iter_num"] - 1)
             fabric.barrier()
 
@@ -350,19 +371,32 @@ def validate(fabric: L.Fabric, model: nn.Module, val_dataloader: DataLoader, max
     model.eval()
 
     losses = []
+    accuracies = []  # This will be kind of a hack because we're always checking for the last 'word' before a stop token.
     for k, batch in enumerate(val_dataloader):
         if k >= max_iters:
             break
         input_ids = batch[:, 0 : model.max_seq_length].contiguous().long()
         targets = batch[:, 1 : (model.max_seq_length + 1)].contiguous().long()
         logits = model(input_ids)
+        periods_loc = torch.where(targets==15, True, False)
+        mask = torch.zeros_like(periods_loc, dtype=torch.bool)
+        mask[:, 0:-1] = periods_loc[:, 1:]
+        mask[:, 0:-2] += periods_loc[:, 2:]
+        
+        #Period is 15 and endoftext is 0. GID is 5417. Need to find the chars between 5417 and 15.
+        # If too slow, can cheat and just look at the two chars before the 15, since it's guaranteed (?)
+        # that there are at least two.
+        preds = torch.max(logits, dim=-1)[1]  # Max returns (values, indices)
+        acc = (preds[mask] == targets[mask]).to(torch.float).mean()
         loss = chunked_cross_entropy(logits, targets)
         losses.append(loss)
+        accuracies.append(acc)
 
     val_loss = torch.stack(losses).mean()
+    val_acc = torch.stack(accuracies).mean()
     model.train()
     fabric.barrier()
-    return val_loss
+    return val_loss, val_acc
 
 
 def get_dataloaders(
