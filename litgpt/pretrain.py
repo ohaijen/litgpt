@@ -283,11 +283,10 @@ def fit(
         is_accumulating = state["iter_num"] % train.gradient_accumulation_iters(devices) != 0
         with fabric.no_backward_sync(model, enabled=is_accumulating):
             logits = model(input_ids)
-            period_locs = torch.where(targets==15, True, False)
-            mask = torch.zeros_like(period_locs, dtype=torch.bool)
-            #raise ValueError(f"{period_locs.to(torch.float).mean()}")
-            mask[:, 0:-1] = period_locs[:, 1:]
-            mask[:, 0:-2] += period_locs[:, 2:]
+            object_token_loc = torch.where(targets==5, True, False)
+            mask = torch.zeros_like(object_token_loc, dtype=torch.bool)
+            mask[:, 1:] = object_token_loc[:, :-1]
+            mask[:, 2:] += object_token_loc[:, :-2]
             
             #Period is 15 and endoftext is 0. GID is 5417. Need to find the chars between 5417 and 15.
             # If too slow, can cheat and just look at the two chars before the 15, since it's guaranteed (?)
@@ -378,10 +377,12 @@ def validate(fabric: L.Fabric, model: nn.Module, val_dataloader: DataLoader, max
         input_ids = batch[:, 0 : model.max_seq_length].contiguous().long()
         targets = batch[:, 1 : (model.max_seq_length + 1)].contiguous().long()
         logits = model(input_ids)
-        periods_loc = torch.where(targets==15, True, False)
-        mask = torch.zeros_like(periods_loc, dtype=torch.bool)
-        mask[:, 0:-1] = periods_loc[:, 1:]
-        mask[:, 0:-2] += periods_loc[:, 2:]
+        # For now, use the fact that the last tokens before the period are the object.
+        # Just kidding, the object always follows token 5
+        object_token_loc = torch.where(targets==5, True, False)
+        mask = torch.zeros_like(object_token_loc, dtype=torch.bool)
+        mask[:, 1:] = object_token_loc[:, :-1]
+        mask[:, 2:] += object_token_loc[:, :-2]
         
         #Period is 15 and endoftext is 0. GID is 5417. Need to find the chars between 5417 and 15.
         # If too slow, can cheat and just look at the two chars before the 15, since it's guaranteed (?)
