@@ -53,6 +53,7 @@ def setup(
     lora_projection: bool = False,
     lora_mlp: bool = False,
     lora_head: bool = False,
+    lora_blocks: str = '111111',
     data: Optional[DataModule] = None,
     train: TrainArgs = TrainArgs(
         save_interval=1000,
@@ -110,6 +111,7 @@ def setup(
         lora_projection=lora_projection,
         lora_mlp=lora_mlp,
         lora_head=lora_head,
+        lora_blocks=[True if i == '1' else False for i  in lora_blocks]
     )
 
     precision = precision or get_default_supported_precision(training=True)

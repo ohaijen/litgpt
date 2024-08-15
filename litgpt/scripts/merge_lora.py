@@ -38,6 +38,7 @@ def merge_lora(
         return
 
     lora_params, pretrained_checkpoint_dir, lora_precision = load_lora_metadata(checkpoint_dir)
+    #lora_params['lora_blocks'] = None
     precision = precision if precision is not None else lora_precision
 
     fabric = L.Fabric(devices=1, precision=precision, accelerator="cpu")
@@ -45,18 +46,22 @@ def merge_lora(
 
     with fabric.init_module(), torch.device("meta"):
         model = GPT(config)
+        for param in model.parameters():
+            with torch.no_grad():
+                torch.nn.init.constant_(param, 0)
         # we don't care about these to perform merging
         model.cos = None
         model.sin = None
 
     lora_path = checkpoint_dir / "lit_model.pth.lora"
     pretrained_checkpoint = torch.load(str(pretrained_checkpoint_dir / "lit_model.pth"), mmap=True)
+    pretrained_checkpoint = pretrained_checkpoint.get("model", pretrained_checkpoint)
     lora_checkpoint = torch.load(str(lora_path), mmap=True)
     lora_checkpoint = lora_checkpoint.get("model", lora_checkpoint)
 
     # Merge LoRA weights into the base model
     pretrained_checkpoint.update(lora_checkpoint)
-    model.load_state_dict(pretrained_checkpoint, assign=True)
+    model.load_state_dict(pretrained_checkpoint, assign=True, strict=False)
     # since LoRA finetuning only saves the LoRA weights, we treat the lora weights dtype as the expected dtype
     lora_dtype = next(iter(lora_checkpoint.values())).dtype
     model.to(dtype=lora_dtype, device="cpu")

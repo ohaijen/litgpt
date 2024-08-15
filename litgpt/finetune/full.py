@@ -40,6 +40,9 @@ def setup(
     out_dir: Path = Path("out/finetune/full"),
     precision: Optional[str] = None,
     devices: Union[int, str] = 1,
+    modules_to_train: Optional[str] = None,
+    train_attn: Optional[bool] = True,
+    train_mlp: Optional[bool] = True,
     resume: Union[bool, Path] = False,
     data: Optional[DataModule] = None,
     train: TrainArgs = TrainArgs(
@@ -98,7 +101,7 @@ def setup(
         strategy = "auto"
 
     fabric = L.Fabric(devices=devices, strategy=strategy, precision=precision, loggers=logger)
-    fabric.launch(main, devices, resume, seed, config, data, checkpoint_dir, out_dir, train, eval)
+    fabric.launch(main, devices, resume, seed, config, data, checkpoint_dir, out_dir, train, eval, modules_to_train, train_attn, train_mlp)
 
 
 def main(
@@ -112,6 +115,9 @@ def main(
     out_dir: Path,
     train: TrainArgs,
     eval: EvalArgs,
+    modules_to_train: str = None,
+    train_attn: bool = True,
+    train_mlp: bool = True
 ) -> None:
     validate_args(train, eval)
 
@@ -132,6 +138,35 @@ def main(
     fabric.print(f"Number of trainable parameters: {num_parameters(model, requires_grad=True):,}")
 
     model = fabric.setup(model)
+    # for n, p in model.named_parameters():
+    #     print(n)
+    #_forward_module.lm_head.weight
+    #_forward_module.transformer.wte.weight
+    #_forward_module.transformer.h.5.mlp.proj.bias
+    #_forward_module.transformer.ln_f.weight
+    if modules_to_train is not None:
+        for n, p in model.named_parameters():
+            for i in range(6):
+                if modules_to_train[i] == '0':
+                    if f'h.{i}' in n and 'norm' not in n:
+                        p.requires_grad = False
+                        print(n)
+            if 'wte' in n or 'ln_f' in n or 'lm_head' in n:  #lm_head
+                p.requires_grad = False
+                print(n)
+    if not train_mlp:
+        for n, p in model.named_parameters():
+            if 'mlp' in n:
+                if p.requires_grad:
+                    print(n)
+                    p.requires_grad = False
+    if not train_attn:
+        for n, p in model.named_parameters():
+            if 'attn' in n:
+                if p.requires_grad:
+                    print(n)
+                    p.requires_grad = False
+
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=train.learning_rate, weight_decay=train.weight_decay, betas=(train.beta1, train.beta2)
     )

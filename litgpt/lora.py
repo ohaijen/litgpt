@@ -45,7 +45,7 @@ two matrices of a lower rank.
 
 import math
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Type, Union
+from typing import Any, Dict, List, Optional, Tuple, Type, Union, List
 
 import torch
 import torch.nn as nn
@@ -489,6 +489,7 @@ class Config(BaseConfig):
     lora_projection: bool = False
     lora_mlp: bool = False
     lora_head: bool = False
+    lora_blocks: Any = None
 
     @property
     def mlp_class(self) -> Type:
@@ -509,13 +510,17 @@ class GPT(BaseModel):
             lora_alpha=config.lora_alpha,
             lora_dropout=config.lora_dropout,
         )
+        import copy
+        config_without_lora = copy.deepcopy(config)
+        config_without_lora.lora_r = 0
         self.transformer = nn.ModuleDict(
             dict(
                 wte=nn.Embedding(config.padded_vocab_size, config.n_embd),
-                h=nn.ModuleList(Block(config) for _ in range(config.n_layer)),
+                h=nn.ModuleList(Block(config if config.lora_blocks is None or config.lora_blocks[i] == True else config_without_lora) for i in range(config.n_layer)),
                 ln_f=config.norm_class(config.n_embd, eps=config.norm_eps),
             )
         )
+        #raise ValueError(config.lora_blocks)
         self.max_seq_length = self.config.block_size
         self.mask_cache: Optional[torch.Tensor] = None
 
@@ -568,6 +573,7 @@ class GPT(BaseModel):
 class Block(BaseBlock):
     def __init__(self, config: Config) -> None:
         nn.Module.__init__(self)
+        print(config.lora_r)
         self.norm_1 = config.norm_class(config.n_embd, eps=config.norm_eps)
         self.attn = CausalSelfAttention(config)
         if not config.shared_attention_norm:
@@ -584,13 +590,16 @@ class CausalSelfAttention(BaseCausalSelfAttention):
         nn.Module.__init__(self)
         shape = (config.n_head + 2 * config.n_query_groups) * config.head_size
         # key, query, value projections for all heads, but in a batch
+        enable_lora=(config.lora_query, config.lora_key, config.lora_value)
+        if config.lora_r == 0:
+            enable_lora = (False, False, False)
         self.attn = LoRAQKVLinear(
             in_features=config.n_embd,
             out_features=shape,
             r=config.lora_r,
             lora_alpha=config.lora_alpha,
             lora_dropout=config.lora_dropout,
-            enable_lora=(config.lora_query, config.lora_key, config.lora_value),
+            enable_lora=enable_lora,
             bias=config.bias,
             # for MQA/GQA support
             head_size=config.head_size,
