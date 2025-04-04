@@ -43,6 +43,7 @@ def setup(
     modules_to_train: Optional[str] = None,
     train_attn: Optional[bool] = True,
     train_mlp: Optional[bool] = True,
+    train_all_lns: Optional[bool] = True,
     resume: Union[bool, Path] = False,
     data: Optional[DataModule] = None,
     train: TrainArgs = TrainArgs(
@@ -101,7 +102,7 @@ def setup(
         strategy = "auto"
 
     fabric = L.Fabric(devices=devices, strategy=strategy, precision=precision, loggers=logger)
-    fabric.launch(main, devices, resume, seed, config, data, checkpoint_dir, out_dir, train, eval, modules_to_train, train_attn, train_mlp)
+    fabric.launch(main, devices, resume, seed, config, data, checkpoint_dir, out_dir, train, eval, modules_to_train, train_attn, train_mlp, train_all_lns)
 
 
 def main(
@@ -117,7 +118,8 @@ def main(
     eval: EvalArgs,
     modules_to_train: str = None,
     train_attn: bool = True,
-    train_mlp: bool = True
+    train_mlp: bool = True,
+    train_all_lns: bool = True,
 ) -> None:
     validate_args(train, eval)
 
@@ -148,9 +150,14 @@ def main(
         for n, p in model.named_parameters():
             for i in range(6):
                 if modules_to_train[i] == '0':
-                    if f'h.{i}' in n and 'norm' not in n:
-                        p.requires_grad = False
-                        print(n)
+                    if train_all_lns:
+                        if f'h.{i}' in n and 'norm' not in n:
+                            p.requires_grad = False
+                            print(n)
+                    else:
+                        if f'h.{i}' in n:
+                            p.requires_grad = False
+                            print(n)
             if 'wte' in n or 'ln_f' in n or 'lm_head' in n:  #lm_head
                 p.requires_grad = False
                 print(n)
