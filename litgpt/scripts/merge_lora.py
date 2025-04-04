@@ -34,8 +34,8 @@ def merge_lora(
     if pretrained_checkpoint_dir is not None:
         check_valid_checkpoint_dir(pretrained_checkpoint_dir)
     if (checkpoint_dir / "lit_model.pth").is_file():
-        print("LoRA weights have already been merged in this checkpoint.")
-        return
+        print("Warning! LoRA weights have already been merged in this checkpoint.")
+        #return
 
     lora_params, pretrained_checkpoint_dir, lora_precision = load_lora_metadata(checkpoint_dir)
     #lora_params['lora_blocks'] = None
