@@ -66,6 +66,7 @@ class TextFiles(DataModule):
 
         # It's ok to use almost all CPUs here because this runs in a single process
         num_workers = os.cpu_count() - 1
+        num_workers = 50
         use_workers = min(num_workers, len(train_files))
         if not Path(self.out_path_train).is_dir():
             validate_tokenizer(self.tokenizer)
