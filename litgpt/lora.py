@@ -430,7 +430,7 @@ class LoRAQKVLinear(LoRALinear):
         return pretrained + lora
 
 
-def mark_only_lora_as_trainable(model: nn.Module, bias: str = "none") -> None:
+def mark_only_lora_as_trainable(model: nn.Module, lora_blocks: Any = None, bias: str = "none") -> None:
     """Freeze all modules except LoRA's and depending on 'bias' value unfreezes bias weights.
 
     Args:
@@ -450,8 +450,8 @@ def mark_only_lora_as_trainable(model: nn.Module, bias: str = "none") -> None:
 
     # depending on the `bias` value unfreeze bias weights
     if bias == "none":
-        return
-    if bias == "all":
+        pass
+    elif bias == "all":
         for n, p in model.named_parameters():
             if "bias" in n:
                 p.requires_grad = True
@@ -462,6 +462,13 @@ def mark_only_lora_as_trainable(model: nn.Module, bias: str = "none") -> None:
     else:
         raise NotImplementedError
 
+    if lora_blocks is not None:
+        for n, p in model.named_parameters():
+            for i in range(6):
+                if lora_blocks[i] is False:
+                    if f'h.{i}.' in n:
+                        p.requires_grad = False
+                        print("disabled grad for", n)
 
 def lora_filter(key: str, value: Any) -> bool:
     return "lora_" in key
@@ -511,16 +518,13 @@ class GPT(BaseModel):
             lora_dropout=config.lora_dropout,
         )
         import copy
-        config_without_lora = copy.deepcopy(config)
-        config_without_lora.lora_r = 0
         self.transformer = nn.ModuleDict(
             dict(
                 wte=nn.Embedding(config.padded_vocab_size, config.n_embd),
-                h=nn.ModuleList(Block(config if config.lora_blocks is None or config.lora_blocks[i] == True else config_without_lora) for i in range(config.n_layer)),
+                h=nn.ModuleList([Block(config) for i in range(config.n_layer)]),
                 ln_f=config.norm_class(config.n_embd, eps=config.norm_eps),
             )
         )
-        #raise ValueError(config.lora_blocks)
         self.max_seq_length = self.config.block_size
         self.mask_cache: Optional[torch.Tensor] = None
 
@@ -573,7 +577,6 @@ class GPT(BaseModel):
 class Block(BaseBlock):
     def __init__(self, config: Config) -> None:
         nn.Module.__init__(self)
-        print(config.lora_r)
         self.norm_1 = config.norm_class(config.n_embd, eps=config.norm_eps)
         self.attn = CausalSelfAttention(config)
         if not config.shared_attention_norm:

@@ -171,7 +171,7 @@ def main(
     checkpoint_path = checkpoint_dir / "lit_model.pth"
     with fabric.init_module(empty_init=(devices > 1)):
         model = GPT(config)
-    mark_only_lora_as_trainable(model)
+    mark_only_lora_as_trainable(model, config.lora_blocks)
 
     fabric.print(f"Number of trainable parameters: {num_parameters(model, requires_grad=True):,}")
     fabric.print(f"Number of non-trainable parameters: {num_parameters(model, requires_grad=False):,}")
@@ -215,6 +215,7 @@ def main(
 
     # Final evaluation
     val_loss = validate(fabric, model, val_dataloader, dataclasses.replace(eval, max_iters=len(val_dataloader)))
+    generate_example(fabric, model, tokenizer, eval, data)
     metrics = {"val_loss": val_loss, "val_ppl": math.exp(val_loss)}
     fabric.log_dict(metrics)
     fabric.print(f"Final evaluation | val loss: {val_loss.item():.3f} | val ppl: {math.exp(val_loss):.3f}")
@@ -247,7 +248,7 @@ def fit(
 ) -> None:
     tokenizer = Tokenizer(checkpoint_dir)
     longest_seq_length, longest_seq_ix = get_longest_seq_length(train_dataloader.dataset)
-    model.max_seq_length = min(longest_seq_length, train.max_seq_length or float("inf"))
+    #model.max_seq_length = min(longest_seq_length, train.max_seq_length or float("inf"))
     fabric.print(
         f"The longest sequence length in the train data is {longest_seq_length}, the model's maximum sequence length is"
         f" {model.max_seq_length} and context length is {model.config.block_size}"
@@ -364,6 +365,7 @@ def validate(fabric: L.Fabric, model: GPT, val_dataloader: DataLoader, eval: Eva
 @torch.no_grad()
 def generate_example(fabric: L.Fabric, model: GPT, tokenizer: Tokenizer, eval: EvalArgs, data: DataModule):
     instruction = "Recommend a movie for me to watch during the weekend and explain the reason."
+    instruction = " SS 0180 0305 2050 2051 RR 1187 2052 OO"
     fabric.print(instruction)
     prompt = data.prompt_style.apply(instruction)
     encoded = tokenizer.encode(prompt, device=fabric.device)
@@ -373,7 +375,8 @@ def generate_example(fabric: L.Fabric, model: GPT, tokenizer: Tokenizer, eval: E
         # do not set `max_seq_length=max_returned_token` because memory is not a concern here
         model.set_kv_cache(batch_size=1)
     output = generate(
-        model, encoded, max_returned_tokens=len(encoded) + eval.max_new_tokens, temperature=0.8, eos_id=tokenizer.eos_id
+        model, encoded, max_returned_tokens=len(encoded) + eval.max_new_tokens, temperature=1., eos_id=tokenizer.eos_id
+
     )
     model.clear_kv_cache()
     model.train()
