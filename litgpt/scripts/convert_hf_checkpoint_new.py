@@ -62,9 +62,14 @@ def copy_weights_gpt_neox(
             continue
         to_name = to_name.format(layer_idx)
         param = load_param(param, from_name, dtype, verbose=debug_mode)
+        import einops
         if from_name.endswith((".query_key_value.weight", ".query_key_value.bias")):
             # Reassemble [q, k, v, q, k, v, ...] --> [q, q, ..., k, k, ..., v, v, ...]
             param = qkv_reassemble(param, config)
+            if from_name.endswith('bias'):
+                param = einops.rearrange(param, "(qkv i h)->(i qkv h)", i=8, qkv=3)
+            else:
+                param = einops.rearrange(param, "(qkv i h) m->(i qkv h) m", i=8, qkv=3)
         if saver is not None:
             param = saver.store_early(param)
         state_dict[to_name] = param
